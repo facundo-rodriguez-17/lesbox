@@ -59,7 +59,12 @@ class User(models.Model):
         if access_token == self.last_token_spotify:
             return True
         else:
-            return self.check_token_spotify()
+            self.last_token_spotify = access_token
+            result = self.check_token_spotify()
+            if result:
+                self.save()
+
+            return result
 
     def get_current_luck(self):
         """Devuelve un valor al azar, que sera usado para calcular
