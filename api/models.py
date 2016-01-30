@@ -183,7 +183,7 @@ class Party(models.Model):
 
     def get_last_played_track(self):
         try:
-            return Track.objects.filter(party=self, played=True).latest('played_time')
+            return Track.objects.filter(party=self, played=True).exclude(played_time=None).latest('played_time')
         except Exception:
             return None
 
