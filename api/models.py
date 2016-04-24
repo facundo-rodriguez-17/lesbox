@@ -1,15 +1,17 @@
-from __future__ import unicode_literals
 import hashlib
 import httplib
 import logging
-from operator import attrgetter
 import random
 import datetime
-from django.db import models
 import json
 import time
-from django.db.models import Max
 import requests
+import heapq
+
+from collections import deque
+from operator import attrgetter
+from django.db import models
+from django.db.models import Max
 
 __author__ = 'agusx1211'
 
@@ -50,7 +52,8 @@ class User(models.Model):
         return spotify_data["id"] == self.spotify_id
 
     def join_party(self, party):
-        party.members.add(self)
+        if self not in party.members:
+            party.members.append(self)
 
     def left_party(self, party):
         party.members.remove(self)
@@ -79,9 +82,7 @@ class Party(models.Model):
 
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owner')
     name = models.CharField(max_length=255)
-    members = models.ManyToManyField(User, related_name='members')
-
-    current_user = models.ForeignKey(User, related_name='current_user', null="True")
+    members = deque()
 
     secret = models.CharField(max_length=65, null="True")
 
@@ -102,31 +103,14 @@ class Party(models.Model):
     def validate_secret(self, secret):
         return self.secret == secret
 
-    def get_members_in_order(self):
-        return sorted(self.members.all(), key=lambda t: t.get_current_luck())
-
-    def get_members_in_order_next_user(self):
-        next_member = self.get_next_user()
-
-        members_sorted = self.get_members_in_order()
-
-        def get_distance_to(user):
-            distance = members_sorted.index(user) - members_sorted.index(next_member)
-            if distance < 0:
-                distance += len(members_sorted)
-
-            return distance
-
-        return sorted(members_sorted, key=lambda t: get_distance_to(t))
-
     def get_next_track(self):
         try:
-            track = self.get_all_tracks_in_order()[0]
+            member = self.get_next_user()
+            track = Track.get_next_track(self, member)
             track.played = True
             track.played_time = time.time()
             track.save()
 
-            self.current_user = self.get_next_user()
             self.save()
 
             return track
@@ -134,41 +118,10 @@ class Party(models.Model):
             return None
 
     def get_all_tracks_in_order(self):
-        members = self.get_members_in_order_next_user()
-        members_tracks = dict()
-
-        next_user = self.get_next_user()
-
-        biggest_playlist = 1
-
-        result_tracks = []
-
-        for member in members:
-            members_tracks[member] = Track.get_all_tracks_sorted(self, member)
-            if len(members_tracks[member]) > biggest_playlist:
-                biggest_playlist = len(members_tracks[member]) + 2
-
-        for x in range(0, biggest_playlist):
-            for y in range(0, len(members)):
-                try:
-                    result_track = members_tracks[members[y]][x]
-                    if result_track is not None:
-                        result_tracks.append(result_track)
-
-                except IndexError:
-                    pass
-
-        return result_tracks
+        all_tracks = []
 
     def get_next_user(self):
-        if self.current_user is not None:
-            if len(self.get_members_in_order()) > self.get_members_in_order().index(self.current_user) + 1:
-                return self.get_members_in_order()[self.get_members_in_order().index(self.current_user) + 1]
-            else:
-                return self.get_members_in_order()[0]
-        else:
-            self.current_user = self.get_members_in_order()[0]
-            return self.current_user
+        return self.members.rotate(1)
 
     @staticmethod
     def get_parties_with(user):
@@ -246,16 +199,15 @@ class Track(models.Model):
 
     @staticmethod
     def get_all_tracks_sorted(party, user):
-        return sorted(Track.get_all_tracks(party, user), key=attrgetter('priority'))
+        return heapq._heapify_max(Track.get_all_tracks(party, user))
 
     @staticmethod
-    def get_last_priority(party, user):
-        all_tracks = Track.get_all_tracks(party, user)
-        if len(all_tracks) > 0:
-            return all_tracks[len(all_tracks) - 1].priority
-        else:
-            return 1
+    def get_next_track(party, user):
+        return heapq._heappop_max(Track.get_all_tracks_sorted(party, user))
 
     @staticmethod
     def del_all_tracks(party, user):
         Track.get_all_tracks(party, user).delete()
+
+    def __cmp__(self, other):
+        return cmp(self.priority, other.priority)
